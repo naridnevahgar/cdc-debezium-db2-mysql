@@ -1,0 +1,17 @@
+{
+    "name": "sink-mysql-connector",
+    "config": {
+        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "CUSTOMERS",
+        "connection.url": "jdbc:mysql://mysql:3306/testschema?user=mysqluser&password=mysqlpw&nullCatalogMeansCurrent=true",
+        "transforms": "unwrap",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.drop.tombstones": "false",
+        "auto.create": "true",
+        "insert.mode": "upsert",
+        "delete.enabled": "true",
+        "pk.fields": "ID",
+        "pk.mode": "record_key"
+    }
+}
