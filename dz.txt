@@ -1,0 +1,124 @@
+docker run -it --rm --name zookeeper -p 2181:2181 -p 2888:2888 -p 3888:3888 debezium/zookeeper
+docker run -it --rm --name kafka -p 9092:9092 --link zookeeper:zookeeper debezium/kafka
+
+docker run -it --rm --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=debezium -e MYSQL_USER=mysqluser -e MYSQL_PASSWORD=mysqlpw debezium/example-mysql:1.0
+
+docker run -it --rm --name connect -p 8083:8083 -e GROUP_ID=1 -e CONFIG_STORAGE_TOPIC=my_connect_configs -e OFFSET_STORAGE_TOPIC=my_connect_offsets -e STATUS_STORAGE_TOPIC=my_connect_statuses --link zookeeper:zookeeper --link kafka:kafka --link mysql:mysql debezium/connect
+
+docker run -it --rm --name mysqlterm --link mysql --rm mysql:5.7 sh -c 'exec mysql -h"$MYSQL_PORT_3306_TCP_ADDR" -P"$MYSQL_PORT_3306_TCP_PORT" -uroot -p"$MYSQL_ENV_MYSQL_ROOT_PASSWORD"'
+
+curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d '{ "name": "inventory-connector", "config": { "connector.class": "io.debezium.connector.mysql.MySqlConnector", "tasks.max": "1", "database.hostname": "mysql", "database.port": "3306", "database.user": "debezium", "database.password": "dbz", "database.server.id": "184054", "database.server.name": "dzmysql", "database.whitelist": "inventory", "database.history.kafka.bootstrap.servers": "kafka:9092", "database.history.kafka.topic": "dbhistory.inventory" } }'
+
+
+
+DB2 Docker:
+
+Run db2
+  docker run --rm -it --name mydb2 --privileged=true -p 50000:50000 -e LICENSE=accept -e DB2INST1_PASSWORD=password -e DBNAME=testdb -v ~/Documents/other_ws/docker/db2/database ibmcom/db2
+
+Copy the contents of the github repo into the container:
+  docker cp Documents/cdc/debezium-incubator/debezium-connector-db2 mydb2:/database
+
+Login to the container
+  docker exec -it mydb2 sh
+
+Change to db2inst1 user
+  su - db2inst1
+  mkdir -p asncdctools/src
+  cd ~
+  cp -r /database/debezium-connector-db2/src/test/docker/db2-cdc-docker/** $HOME/asncdctools/src/
+  cd $HOME/sqllib/samples/c/
+  cp ./bldrtn $HOME/asncdctools/src
+  cd $HOME/asncdctools/src
+  ./bldrtn asncdc
+  cd $HOME/sqllib/bnd
+  db2 connect to testdb
+  db2 bind db2schema.bnd blocking all grant public sqlerror continue
+  db2 backup db testdb to /dev/null
+  db2 connect to testdb
+  cp $HOME/asncdctools/src/asncdc $HOME/sqllib/function
+  chmod 777 $HOME/sqllib/function
+  db2 -tvmf $HOME/asncdctools/src/asncdc_UDF.sql
+  db2 -tvmf $HOME/asncdctools/src/asncdctables.sql
+  db2 -tvmf $HOME/asncdctools/src/asncdcaddremove.sql
+
+  Note:
+    A committed docker image is available in
+      docker commit -m "Added Db2 JAR" mydb2 raghavendiran/mydb2:with-asncdc
+
+Open any SQL client and connect to the DB2 instance
+Create your schema and playaround!
+
+sink to mysql
+  docker run -it --rm --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=debezium -e MYSQL_USER=mysqluser -e MYSQL_PASSWORD=mysqlpw debezium/example-mysql:1.0
+
+
+docker connect for db2 (works only with 1.1, not latest, as of 25-Feb)
+  docker run -it --rm --name connect -p 8083:8083 -e GROUP_ID=1 -e CONFIG_STORAGE_TOPIC=my_connect_configs -e OFFSET_STORAGE_TOPIC=my_connect_offsets -e STATUS_STORAGE_TOPIC=my_connect_statuses --link zookeeper:zookeeper --link kafka:kafka --link mydb2:db2 debezium/connect:1.1
+
+for connect, prefer the below local image: (Committed image)
+  docker run -it --rm --name connect -p 8083:8083 -e GROUP_ID=1 -e CONFIG_STORAGE_TOPIC=my_connect_configs -e OFFSET_STORAGE_TOPIC=my_connect_offsets -e STATUS_STORAGE_TOPIC=my_connect_statuses --link zookeeper:zookeeper --link kafka:kafka --link mydb2:db2 --link mysql:mysql raghavendiran/kconnect:with-db2
+
+this has jdbc sink connector as well and mysql
+  docker run -it --rm --name connect -p 8083:8083 -e GROUP_ID=1 -e CONFIG_STORAGE_TOPIC=my_connect_configs -e OFFSET_STORAGE_TOPIC=my_connect_offsets -e STATUS_STORAGE_TOPIC=my_connect_statuses --link zookeeper:zookeeper --link kafka:kafka --link mydb2:db2 --link mysql:mysql raghavendiran/kconnect:final
+
+
+-- source connector with debezium connector
+curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d '{
+  "name": "db2-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.db2.Db2Connector",
+    "database.hostname": "db2",
+    "database.port": "50000",
+    "database.user": "db2inst1",
+    "database.password": "password",
+    "database.dbname": "testdb",
+    "database.server.name": "testdb",
+    "table.whitelist": "TESTSCHEMA.customers",
+    "database.history.kafka.bootstrap.servers": "kafka:9092",
+    "database.history.kafka.topic": "dbhistory.testdb",
+    "transforms": "route",
+    "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.route.regex": "testdb.TESTSCHEMA.(.*)",
+    "transforms.route.replacement": "$1"
+  }
+}'
+
+  Response:
+  HTTP/1.1 201 Created
+  Date: Tue, 25 Feb 2020 07:21:34 GMT
+  Location: http://localhost:8083/connectors/db2-connector
+  Content-Type: application/json
+  Content-Length: 458
+  Server: Jetty(9.4.20.v20190813)
+
+  {"name":"db2-connector","config":{"connector.class":"io.debezium.connector.db2.Db2Connector","database.hostname":"db2","database.port":"50000","database.user":"db2inst1","database.password":"password","database.dbname":"testdb","database.server.name":"testdb","table.whitelist":"TESTSCHEMA.customers","database.history.kafka.bootstrap.servers":"kafka:9092","database.history.kafka.topic":"dbhistory.testdb","name":"db2-connector"},"tasks":[],"type":"source"}⏎
+
+
+-- sink connector with confluent jdbc sink connector
+curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d '{
+    "name": "sink-mysql-connector",
+    "config": {
+        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "CUSTOMERS",
+        "connection.url": "jdbc:mysql://mysql:3306/testschema?user=mysqluser&password=mysqlpw&nullCatalogMeansCurrent=true",
+        "transforms": "unwrap",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.drop.tombstones": "false",
+        "auto.create": "true",
+        "insert.mode": "upsert",
+        "delete.enabled": "true",
+        "pk.fields": "ID",
+        "pk.mode": "record_key"
+    }
+}'
+
+
+
+--
+
+
+add the unwrap header parameter on source side
+setup sink connector to mysql
+  link mysql connector to connect container
